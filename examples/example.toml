@@ -1,0 +1,237 @@
+# Example Ionix Kernel Configuration Schema
+
+[[items]]
+name = "Symmetric Multiprocessing"
+key = "SMP"
+type = "bool"
+default = true
+help = "Enable symmetric multiprocessing (SMP) support. Allows the kernel to use multiple CPU cores."
+
+[[items]]
+name = "Maximum CPUs"
+key = "MAX_CPUS"
+type = "u64"
+default = 256
+help = "Maximum number of CPUs supported. Must be between 2 and 256."
+depends_on = ["SMP"]
+
+[[items]]
+name = "Maximum IRQs"
+key = "MAX_IRQ"
+type = "u64"
+default = 256
+help = "Maximum number of interrupt request (IRQ) lines."
+
+[[items]]
+name = "Kernel Base Address"
+key = "KERNEL_BASE"
+type = "u64"
+default = "0xFFFF_8000_0000_0000"
+help = "Virtual address where kernel is mapped. Must be aligned to 2MB for huge pages."
+
+[[items]]
+name = "Physical Memory Limit"
+key = "MAX_PHYSMEM"
+type = "u64"
+default = "0xFFFF_FFFF_FFFF"
+help = "Maximum physical memory to recognize."
+
+[[items]]
+name = "Huge Pages Support"
+key = "HUGEPAGES"
+type = "bool"
+default = false
+help = "Enable transparent huge pages (THP) for better memory performance."
+
+[[items]]
+name = "Network Stack"
+key = "NET_STACK"
+type = "bool"
+default = true
+help = "Enable the TCP/IP networking stack. Required for any network communication."
+
+[[items]]
+name = "IPv4 Support"
+key = "NET_IPV4"
+type = "bool"
+default = true
+help = "Enable IPv4 protocol support."
+depends_on = ["NET_STACK"]
+
+[[items]]
+name = "IPv6 Support"
+key = "NET_IPV6"
+type = "bool"
+default = true
+help = "Enable IPv6 protocol support."
+depends_on = ["NET_STACK"]
+
+[[items]]
+name = "TCP Maximum Segments"
+key = "NET_TCP_MAX_SEGS"
+type = "u64"
+default = 128
+help = "Maximum number of TCP segments in flight."
+depends_on = ["NET_IPV4"]
+
+[[items]]
+name = "Default Network Interface"
+key = "NET_DEFAULT_IF"
+type = "string"
+default = "eth0"
+help = "Default network interface name."
+depends_on = ["NET_STACK"]
+expert = true
+
+[[items]]
+name = "Ext2 Filesystem"
+key = "FS_EXT2"
+type = "bool"
+default = true
+help = "Support the ext2 journaling filesystem."
+
+[[items]]
+name = "Ext4 Filesystem"
+key = "FS_EXT4"
+type = "bool"
+default = true
+help = "Support the ext4 filesystem. Ext4 is the most common Linux filesystem."
+depends_on = ["FS_EXT2"]
+
+[[items]]
+name = "Btrfs Filesystem"
+key = "FS_BTRFS"
+type = "bool"
+default = false
+help = "Support the Btrfs copy-on-write filesystem."
+expert = true
+
+[[items]]
+name = "NFS Client"
+key = "FS_NFS"
+type = "bool"
+default = false
+help = "Enable NFS (Network File System) client support."
+depends_on = ["NET_STACK"]
+
+[[items]]
+name = "VFAT Filesystem"
+key = "FS_VFAT"
+type = "bool"
+default = true
+help = "Support FAT32/FAT16 filesystems. Required for boot partitions."
+
+[[items]]
+name = "PCI Express Support"
+key = "DEV_PCIE"
+type = "bool"
+default = true
+help = "Enable PCI Express bus support."
+
+[[items]]
+name = "NVMe Driver"
+key = "DEV_NVME"
+type = "bool"
+default = true
+help = "Enable NVMe SSD support."
+depends_on = ["DEV_PCIE"]
+
+[[items]]
+name = "AHCI SATA Driver"
+key = "DEV_AHCI"
+type = "bool"
+default = true
+help = "Enable AHCI SATA controller support."
+depends_on = ["DEV_PCIE"]
+
+[[items]]
+name = "USB Support"
+key = "DEV_USB"
+type = "bool"
+default = true
+help = "Enable USB host controller support."
+
+[[items]]
+name = "USB 3.0 Support"
+key = "DEV_USB3"
+type = "bool"
+default = true
+help = "Enable USB 3.0 (xHCI) support."
+depends_on = ["DEV_USB"]
+
+[[items]]
+name = "VirtIO Drivers"
+key = "DEV_VIRTIO"
+type = "bool"
+default = true
+help = "Enable VirtIO paravirtualized drivers. Used by QEMU/KVM."
+expert = true
+
+[[items]]
+name = "ASLR"
+key = "SEC_ASLR"
+type = "bool"
+default = true
+help = "Randomize memory addresses for security. Makes buffer overflow exploitation harder."
+
+[[items]]
+name = "Stack Protector"
+key = "SEC_STACKPROT"
+type = "bool"
+default = true
+help = "Enable stack canaries to detect stack smashing."
+
+[[items]]
+name = "DEP/NX"
+key = "SEC_NX"
+type = "bool"
+default = true
+help = "Mark memory pages as non-executable. Prevents code execution on data segments."
+
+[[items]]
+name = "Secure VGA"
+key = "SECURE_VGA"
+type = "bool"
+default = true
+help = "Secure framebuffer console with memory protection."
+depends_on = ["SEC_NX", "SEC_ASLR"]
+
+[[items]]
+name = "Debug Logging"
+key = "DEBUG_LOG"
+type = "bool"
+default = false
+help = "Enable comprehensive debug logging. Significantly impacts performance."
+expert = true
+
+[[items]]
+name = "Log Level"
+key = "DEBUG_LOG_LEVEL"
+type = "string"
+default = "info"
+help = "Kernel log verbosity level. Options: trace, debug, info, warn, error"
+depends_on = ["DEBUG_LOG"]
+
+[[items]]
+name = "Early Serial Debug"
+key = "DEBUG_EARLY_SERIAL"
+type = "bool"
+default = false
+help = "Output early boot messages to serial port. Useful for debugging boot failures."
+
+[[items]]
+name = "Serial Port Base"
+key = "DEBUG_SERIAL_PORT"
+type = "u64"
+default = 0x3F8
+help = "I/O port address for serial debug port."
+depends_on = ["DEBUG_EARLY_SERIAL"]
+expert = true
+
+[[items]]
+name = "Legacy VGA Console"
+key = "LEGACY_VGA"
+type = "bool"
+default = false
+help = "DEPRECATED: Use framebuffer console instead."
+deprecated = { message = "Legacy VGA is deprecated.", replaced_by = "SECURE_VGA" }

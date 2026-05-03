@@ -1,0 +1,253 @@
+# Ionix Schema with Nested Menus Example
+# This demonstrates the menu/header feature similar to Linux menuconfig
+
+# Top-level items (no menu - shown at root)
+[[items]]
+name = "Kernel Mode"
+key = "KERNEL_MODE"
+type = "bool"
+default = true
+help = "Enable kernel mode (required)"
+
+[[items]]
+name = "Maximum CPUs"
+key = "MAX_CPUS"
+type = "u64"
+default = 256
+help = "Maximum number of CPUs supported"
+
+# --- Network Menu ---
+[[menus]]
+name = "Network Configuration"
+key = "NET"
+depends_on = ["KERNEL_MODE"]
+visible = true
+help = "Network stack configuration options"
+
+[[menus.items]]
+name = "TCP/IP Stack"
+key = "NET_TCP"
+type = "bool"
+default = true
+help = "Enable TCP/IP networking"
+
+[[menus.items]]
+name = "IPv4 Support"
+key = "NET_IPV4"
+type = "bool"
+default = true
+help = "Enable IPv4 protocol"
+depends_on = ["NET_TCP"]
+
+[[menus.items]]
+name = "IPv6 Support"
+key = "NET_IPV6"
+type = "bool"
+default = true
+help = "Enable IPv6 protocol"
+depends_on = ["NET_TCP"]
+
+[[menus.items]]
+name = "TCP Max Segments"
+key = "NET_TCP_SEGS"
+type = "u32"
+default = 128
+help = "Maximum concurrent TCP segments"
+depends_on = ["NET_IPV4"]
+
+# Nested: Wireless submenu
+[[menus]]
+name = "Wireless Support"
+key = "WIRELESS"
+depends_on = ["NET_TCP"]
+
+[[menus.items]]
+name = "WiFi Support"
+key = "NET_WIFI"
+type = "bool"
+default = false
+help = "Enable WiFi/802.11 support"
+
+[[menus.items]]
+name = "WiFi Device Name"
+key = "NET_WIFI_DEV"
+type = "string"
+default = "wlan0"
+help = "Default wireless interface name"
+depends_on = ["NET_WIFI"]
+
+# --- Filesystem Menu ---
+[[menus]]
+name = "Filesystem Options"
+key = "FS"
+visible = true
+help = "Filesystem support configuration"
+
+[[menus.items]]
+name = "Ext2 Support"
+key = "FS_EXT2"
+type = "bool"
+default = true
+help = "Ext2 filesystem (legacy)"
+
+[[menus.items]]
+name = "Ext4 Support"
+key = "FS_EXT4"
+type = "bool"
+default = true
+help = "Ext4 journaling filesystem"
+depends_on = ["FS_EXT2"]
+
+[[menus.items]]
+name = "Btrfs Support"
+key = "FS_BTRFS"
+type = "bool"
+default = false
+help = "Btrfs copy-on-write filesystem"
+expert = true
+
+[[menus.items]]
+name = "NFS Client"
+key = "FS_NFS"
+type = "bool"
+default = false
+help = "Network File System client"
+depends_on = ["NET_TCP"]
+
+[[menus.items]]
+name = "VFAT Support"
+key = "FS_VFAT"
+type = "bool"
+default = true
+help = "FAT/FAT32 filesystem (for USB drives)"
+
+# --- Device Drivers Menu ---
+[[menus]]
+name = "Device Drivers"
+key = "DRIVERS"
+depends_on = ["KERNEL_MODE"]
+visible = true
+help = "Hardware driver configuration"
+
+[[menus.items]]
+name = "PCI Express"
+key = "DEV_PCIE"
+type = "bool"
+default = true
+help = "PCI Express bus support"
+
+[[menus.items]]
+name = "NVMe Driver"
+key = "DEV_NVME"
+type = "bool"
+default = true
+help = "NVMe SSD support"
+depends_on = ["DEV_PCIE"]
+
+[[menus.items]]
+name = "AHCI SATA"
+key = "DEV_AHCI"
+type = "bool"
+default = true
+help = "SATA/AHCI controller support"
+depends_on = ["DEV_PCIE"]
+
+[[menus.items]]
+name = "USB Support"
+key = "DEV_USB"
+type = "bool"
+default = true
+help = "USB host controller"
+
+[[menus.items]]
+name = "USB 3.0 (xHCI)"
+key = "DEV_USB3"
+type = "bool"
+default = true
+help = "USB 3.0 support"
+depends_on = ["DEV_USB"]
+
+# --- Security Menu ---
+[[menus]]
+name = "Security Options"
+key = "SEC"
+depends_on = ["KERNEL_MODE"]
+visible = true
+
+[[menus.items]]
+name = "Address Space Layout Randomization"
+key = "SEC_ASLR"
+type = "bool"
+default = true
+help = "Randomize memory addresses"
+
+[[menus.items]]
+name = "Execute Never (DEP)"
+key = "SEC_NX"
+type = "bool"
+default = true
+help = "Non-executable memory pages"
+
+[[menus.items]]
+name = "Stack Protector"
+key = "SEC_STACKPROT"
+type = "bool"
+default = true
+help = "Stack canaries"
+
+# --- Debug Menu ---
+[[menus]]
+name = "Debugging"
+key = "DEBUG"
+visible = true
+expert = true
+
+[[menus.items]]
+name = "Debug Logging"
+key = "DEBUG_LOG"
+type = "bool"
+default = false
+help = "Enable kernel debug logging"
+
+[[menus.items]]
+name = "Debug Log Level"
+key = "DEBUG_LOG_LEVEL"
+type = "string"
+default = "info"
+help = "Log verbosity: trace, debug, info, warn, error"
+depends_on = ["DEBUG_LOG"]
+
+[[menus.items]]
+name = "Early Serial Debug"
+key = "DEBUG_SERIAL"
+type = "bool"
+default = false
+help = "Serial port debug output during boot"
+
+[[menus.items]]
+name = "Serial Port Address"
+key = "DEBUG_SERIAL_PORT"
+type = "u64"
+default = 0x3F8
+help = "I/O port for serial debug"
+depends_on = ["DEBUG_SERIAL"]
+expert = true
+
+# Using menu field directly on items (alternative to [[menus.items]])
+# This item belongs to the Network menu
+[[items]]
+name = "Default Network Interface"
+key = "NET_DEFAULT_IF"
+type = "string"
+default = "eth0"
+help = "Default network interface name"
+menu = "NET"
+
+# Another example - using menu field directly
+[[items]]
+name = "Maximum Open Files"
+key = "FS_MAX_OPEN"
+type = "u32"
+default = 1024
+help = "Maximum number of open files per process"
+menu = "FS"
