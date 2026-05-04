@@ -1,6 +1,6 @@
 //! Input dialog widget for editing numeric and string values.
 
-use crossterm::event::{KeyEvent, KeyCode};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -127,13 +127,13 @@ impl Widget for InputDialog {
             &self.input
         };
 
-        let cursor_rel = self.cursor_pos.saturating_sub(
-            if self.input.len() > field_width as usize {
-                self.input.len() - field_width as usize
-            } else {
-                0
-            },
-        );
+        let cursor_rel =
+            self.cursor_pos
+                .saturating_sub(if self.input.len() > field_width as usize {
+                    self.input.len() - field_width as usize
+                } else {
+                    0
+                });
 
         let mut input_text = String::new();
         for (i, c) in display_input.chars().enumerate() {

@@ -2,8 +2,8 @@
 
 #![allow(non_snake_case)]
 
-use crate::schema::{ConfigItem, ConfigSchema, ConfigType};
 use crate::schema::codegen::ConfigValues;
+use crate::schema::{ConfigItem, ConfigSchema, ConfigType};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::collections::HashMap;
@@ -28,7 +28,11 @@ pub enum SearchMode {
 #[derive(Debug, Clone)]
 pub enum ListEntry {
     /// A menu/category header (e.g., "Network Options ---")
-    Menu { key: String, name: String, expanded: bool },
+    Menu {
+        key: String,
+        name: String,
+        expanded: bool,
+    },
     /// A config item
     Item { schema_idx: usize, item: ConfigItem },
     /// Exit from submenu (shown at bottom of menu pages)
@@ -90,7 +94,9 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(schema: ConfigSchema) -> Self {
-        let filtered_indices = Self::compute_filter_indices(&schema, "", FilterMode::All, false);
+        let modified = HashMap::new();
+        let filtered_indices =
+            Self::compute_filter_indices(&schema, "", FilterMode::All, false, &modified);
 
         // Initialize all menus as expanded by default
         let mut expanded_menus = HashMap::new();
@@ -99,12 +105,13 @@ impl AppState {
         }
 
         // Compute list entries including menu headers
-        let list_entries = Self::compute_list_entries(&schema, &filtered_indices, &expanded_menus, None);
+        let list_entries =
+            Self::compute_list_entries(&schema, &filtered_indices, &expanded_menus, None);
 
         Self {
             schema,
             values: HashMap::new(),
-            modified: HashMap::new(),
+            modified,
             selected_index: 0,
             scroll_offset: 0,
             visible_height: 20,
@@ -161,9 +168,9 @@ impl AppState {
 
     /// Get current menu name for title bar.
     pub fn current_menu_name(&self) -> Option<String> {
-        self.current_menu.as_ref().and_then(|key| {
-            self.schema.get_menu(key).map(|m| m.name.clone())
-        })
+        self.current_menu
+            .as_ref()
+            .and_then(|key| self.schema.get_menu(key).map(|m| m.name.clone()))
     }
 
     /// Compute list entries including menu headers.
@@ -171,20 +178,63 @@ impl AppState {
         schema: &ConfigSchema,
         filtered_indices: &[usize],
         expanded_menus: &HashMap<String, bool>,
-    current_menu: Option<&str>,
+        current_menu: Option<&str>,
     ) -> Vec<ListEntry> {
-    let mut entries = Vec::new();
+        let mut entries = Vec::new();
 
-    // Get items grouped by menu
-    let items_by_menu = schema.items_by_menu();
+        // Get items grouped by menu
+        let items_by_menu = schema.items_by_menu();
 
-    // If in a menu, show only that menu's items (full-page view)
-    if let Some(menu_key) = current_menu {
-        // Show items in this menu
-        if let Some(items) = items_by_menu.get(&Some(menu_key.to_string())) {
-            let filtered_items: Vec<_> = items
+        // If in a menu, show only that menu's items (full-page view)
+        if let Some(menu_key) = current_menu {
+            // Show items in this menu
+            if let Some(items) = items_by_menu.get(&Some(menu_key.to_string())) {
+                let filtered_items: Vec<_> = items
+                    .iter()
+                    .filter(|item| {
+                        filtered_indices.contains(&schema.get_index_by_key(&item.key).unwrap_or(0))
+                    })
+                    .collect();
+
+                for item in filtered_items {
+                    if let Some(idx) = schema.get_index_by_key(&item.key) {
+                        entries.push(ListEntry::Item {
+                            schema_idx: idx,
+                            item: (*item).clone(),
+                        });
+                    }
+                }
+            }
+
+            // Check if this menu has submenus - add them as menu entries
+            for menu in schema.menus() {
+                // Check if this menu is a child of current menu (depends on current menu)
+                if menu.depends_on.iter().any(|d| d == menu_key) {
+                    let expanded = *expanded_menus.get(&menu.key).unwrap_or(&true);
+                    entries.push(ListEntry::Menu {
+                        key: menu.key.clone(),
+                        name: menu.name.clone(),
+                        expanded,
+                    });
+                }
+            }
+
+            // Add "Back" entry at the bottom to return to parent
+            entries.push(ListEntry::BackMenu {
+                menu_key: menu_key.to_string(),
+            });
+
+            return entries;
+        }
+
+        // Root view: show top-level menus AND items without a menu (like Linux menuconfig)
+        // First, show items that don't belong to any menu
+        if let Some(root_items) = items_by_menu.get(&None) {
+            let filtered_items: Vec<_> = root_items
                 .iter()
-                .filter(|item| filtered_indices.contains(&schema.get_index_by_key(&item.key).unwrap_or(0)))
+                .filter(|item| {
+                    filtered_indices.contains(&schema.get_index_by_key(&item.key).unwrap_or(0))
+                })
                 .collect();
 
             for item in filtered_items {
@@ -197,73 +247,40 @@ impl AppState {
             }
         }
 
-        // Check if this menu has submenus - add them as menu entries
+        // Then show top-level menus (menus with no dependencies)
         for menu in schema.menus() {
-            // Check if this menu is a child of current menu (depends on current menu)
-            if menu.depends_on.iter().any(|d| d == menu_key) {
-                let expanded = *expanded_menus.get(&menu.key).unwrap_or(&true);
-                entries.push(ListEntry::Menu {
-                    key: menu.key.clone(),
-                    name: menu.name.clone(),
-                    expanded,
-                });
+            // Skip menus that have dependencies (they are submenus)
+            if !menu.depends_on.is_empty() {
+                continue;
             }
+
+            let expanded = *expanded_menus.get(&menu.key).unwrap_or(&true);
+            entries.push(ListEntry::Menu {
+                key: menu.key.clone(),
+                name: menu.name.clone(),
+                expanded,
+            });
         }
 
-        // Add "Back" entry at the bottom to return to parent
-        entries.push(ListEntry::BackMenu {
-            menu_key: menu_key.to_string(),
-        });
-
-        return entries;
+        entries
     }
-
-    // Root view: show top-level menus AND items without a menu (like Linux menuconfig)
-    // First, show items that don't belong to any menu
-    if let Some(root_items) = items_by_menu.get(&None) {
-        let filtered_items: Vec<_> = root_items
-            .iter()
-            .filter(|item| filtered_indices.contains(&schema.get_index_by_key(&item.key).unwrap_or(0)))
-            .collect();
-
-        for item in filtered_items {
-            if let Some(idx) = schema.get_index_by_key(&item.key) {
-                entries.push(ListEntry::Item {
-                    schema_idx: idx,
-                    item: (*item).clone(),
-                });
-            }
-        }
-    }
-
-    // Then show top-level menus (menus with no dependencies)
-    for menu in schema.menus() {
-        // Skip menus that have dependencies (they are submenus)
-        if !menu.depends_on.is_empty() {
-            continue;
-        }
-
-        let expanded = *expanded_menus.get(&menu.key).unwrap_or(&true);
-        entries.push(ListEntry::Menu {
-            key: menu.key.clone(),
-            name: menu.name.clone(),
-            expanded,
-        });
-    }
-
-    entries
-}
 
     /// Toggle a menu's expanded state.
     pub fn toggle_menu(&mut self, menu_key: &str) {
-        let expanded = self.expanded_menus.entry(menu_key.to_string()).or_insert(true);
+        let expanded = self
+            .expanded_menus
+            .entry(menu_key.to_string())
+            .or_insert(true);
         *expanded = !*expanded;
         self.recompute_list();
     }
 
     /// Check if the selected entry is a menu.
     pub fn selected_is_menu(&self) -> bool {
-        matches!(self.list_entries.get(self.selected_index), Some(ListEntry::Menu { .. }))
+        matches!(
+            self.list_entries.get(self.selected_index),
+            Some(ListEntry::Menu { .. })
+        )
     }
 
     /// Get the menu key at the current selection (if any).
@@ -288,8 +305,36 @@ impl AppState {
         }
     }
 
+    pub fn recompute_current_filter_preserving(&mut self, key: &str) {
+        self.filtered_indices = Self::compute_filter_indices(
+            &self.schema,
+            &self.search_query,
+            self.filter_mode,
+            self.expert_mode,
+            &self.modified,
+        );
+        self.recompute_list();
+        if let Some(index) = self
+            .list_entries
+            .iter()
+            .position(|entry| matches!(entry, ListEntry::Item { item, .. } if item.key == key))
+        {
+            self.selected_index = index;
+        }
+        self.ensure_visible();
+    }
+
     pub fn load_values(&mut self, values: ConfigValues) {
         self.values = values;
+    }
+
+    /// Return the full effective config: loaded values plus current edits.
+    pub fn effective_values(&self) -> ConfigValues {
+        let mut values = ConfigValues::new();
+        for item in self.schema.items() {
+            values.insert(item.key.clone(), self.effective_value(&item.key).clone());
+        }
+        values
     }
 
     /// Get currently visible items based on filter/search state.
@@ -332,11 +377,20 @@ impl AppState {
         let effective = self.effective_value(&item.key);
 
         match item.config_type {
-            ConfigType::Bool => effective.as_bool().map(|b| if b { "[*]" } else { "[ ]" }).unwrap_or("[?]").to_string(),
+            ConfigType::Bool => effective
+                .as_bool()
+                .map(|b| if b { "[*]" } else { "[ ]" })
+                .unwrap_or("[?]")
+                .to_string(),
             ConfigType::String => effective.as_str().unwrap_or("").to_string(),
-            ConfigType::U8 | ConfigType::U16 | ConfigType::U32 | ConfigType::U64 | ConfigType::Usize => {
-                effective.as_integer().map(|i| i.to_string()).unwrap_or_default()
-            }
+            ConfigType::U8
+            | ConfigType::U16
+            | ConfigType::U32
+            | ConfigType::U64
+            | ConfigType::Usize => effective
+                .as_integer()
+                .map(|i| i.to_string())
+                .unwrap_or_default(),
         }
     }
 
@@ -345,7 +399,17 @@ impl AppState {
         if let Some(item) = self.schema.get_index(idx) {
             if item.config_type == ConfigType::Bool {
                 let current = self.effective_value(&item.key).as_bool().unwrap_or(false);
-                self.modified.insert(item.key.clone(), toml::Value::Boolean(!current));
+                let key = item.key.clone();
+                let next = !current;
+                self.modified
+                    .insert(item.key.clone(), toml::Value::Boolean(next));
+                if next {
+                    for conflict in &item.conflicts_with {
+                        self.modified
+                            .insert(conflict.clone(), toml::Value::Boolean(false));
+                    }
+                }
+                self.recompute_current_filter_preserving(&key);
             }
         }
     }
@@ -353,15 +417,21 @@ impl AppState {
     /// Set value for a numeric config item.
     pub fn set_numeric(&mut self, idx: usize, value: i64) {
         if let Some(item) = self.schema.get_index(idx) {
+            let key = item.key.clone();
             let tom_l_val = match item.config_type {
                 ConfigType::U8 if (0..=255).contains(&value) => Some(toml::Value::Integer(value)),
-                ConfigType::U16 if (0..=65535).contains(&value) => Some(toml::Value::Integer(value)),
-                ConfigType::U32 | ConfigType::U64 | ConfigType::Usize if value >= 0 => Some(toml::Value::Integer(value)),
+                ConfigType::U16 if (0..=65535).contains(&value) => {
+                    Some(toml::Value::Integer(value))
+                }
+                ConfigType::U32 | ConfigType::U64 | ConfigType::Usize if value >= 0 => {
+                    Some(toml::Value::Integer(value))
+                }
                 _ => None,
             };
 
             if let Some(val) = tom_l_val {
                 self.modified.insert(item.key.clone(), val);
+                self.recompute_current_filter_preserving(&key);
             }
         }
     }
@@ -370,7 +440,10 @@ impl AppState {
     pub fn set_string(&mut self, idx: usize, value: String) {
         if let Some(item) = self.schema.get_index(idx) {
             if item.config_type == ConfigType::String {
-                self.modified.insert(item.key.clone(), toml::Value::String(value));
+                let key = item.key.clone();
+                self.modified
+                    .insert(item.key.clone(), toml::Value::String(value));
+                self.recompute_current_filter_preserving(&key);
             }
         }
     }
@@ -378,20 +451,20 @@ impl AppState {
     /// Revert changes for a specific item.
     pub fn revert_item(&mut self, key: &str) {
         self.modified.remove(key);
+        self.recompute_current_filter_preserving(key);
     }
 
     /// Revert all changes.
     pub fn revert_all(&mut self) {
         self.modified.clear();
+        self.recompute_filter();
     }
 
     /// Check if all dependencies are satisfied for an item.
     pub fn dependencies_satisfied(&self, item: &ConfigItem) -> bool {
-        item.depends_on.iter().all(|dep| {
-            self.effective_value(dep)
-                .as_bool()
-                .unwrap_or(false)
-        })
+        item.depends_on
+            .iter()
+            .all(|dep| self.effective_value(dep).as_bool().unwrap_or(false))
     }
 
     /// Get items that would be affected if we disable a key.
@@ -403,9 +476,7 @@ impl AppState {
     pub fn check_enable_blockers(&self, item: &ConfigItem) -> Vec<String> {
         item.depends_on
             .iter()
-            .filter(|dep| {
-                !self.effective_value(dep).as_bool().unwrap_or(false)
-            })
+            .filter(|dep| !self.effective_value(dep).as_bool().unwrap_or(false))
             .cloned()
             .collect()
     }
@@ -420,7 +491,7 @@ impl AppState {
 
     /// Move selection down.
     pub fn move_down(&mut self) {
-        if self.selected_index < self.filtered_indices.len().saturating_sub(1) {
+        if self.selected_index < self.list_entries.len().saturating_sub(1) {
             self.selected_index += 1;
             self.ensure_visible();
         }
@@ -428,14 +499,21 @@ impl AppState {
 
     /// Move selection by pages.
     pub fn move_page_up(&mut self) {
-        self.selected_index = self.selected_index.saturating_sub(10);
+        let page = self.visible_height.saturating_sub(1).max(1);
+        self.selected_index = self.selected_index.saturating_sub(page);
         self.ensure_visible();
     }
 
     /// Move selection by pages.
     pub fn move_page_down(&mut self) {
-        let max = self.filtered_indices.len().saturating_sub(1);
-        self.selected_index = (self.selected_index + 10).min(max);
+        let page = self.visible_height.saturating_sub(1).max(1);
+        let max = self.list_entries.len().saturating_sub(1);
+        self.selected_index = (self.selected_index + page).min(max);
+        self.ensure_visible();
+    }
+
+    pub fn set_visible_height(&mut self, height: usize) {
+        self.visible_height = height.max(1);
         self.ensure_visible();
     }
 
@@ -448,6 +526,10 @@ impl AppState {
             // Cursor below visible area - scroll down to show it
             self.scroll_offset = self.selected_index - self.visible_height + 1;
         }
+    }
+
+    pub fn ensure_selected_visible(&mut self) {
+        self.ensure_visible();
     }
 
     /// Start search mode.
@@ -488,6 +570,7 @@ impl AppState {
             &self.search_query,
             self.filter_mode,
             self.expert_mode,
+            &self.modified,
         );
         // Also recompute list entries including menu headers
         self.recompute_list();
@@ -500,12 +583,15 @@ impl AppState {
         query: &str,
         filter_mode: FilterMode,
         expert_mode: bool,
+        modified: &HashMap<String, toml::Value>,
     ) -> Vec<usize> {
         let matcher = SkimMatcherV2::default();
         let mut results: Vec<(usize, i64)> = Vec::new();
 
         for idx in 0..schema.len() {
-            let Some(item) = schema.get_index(idx) else { continue };
+            let Some(item) = schema.get_index(idx) else {
+                continue;
+            };
 
             // Filter by expert mode
             if item.expert && !expert_mode {
@@ -514,7 +600,11 @@ impl AppState {
 
             // Filter by mode
             match filter_mode {
-                FilterMode::Modified => {} // TODO: implement
+                FilterMode::Modified => {
+                    if !modified.contains_key(&item.key) {
+                        continue;
+                    }
+                }
                 FilterMode::Expert => {
                     if !item.expert {
                         continue;

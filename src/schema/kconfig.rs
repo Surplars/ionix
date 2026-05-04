@@ -46,7 +46,14 @@ pub enum ConfigType {
 
 impl ConfigType {
     pub fn is_unsigned(&self) -> bool {
-        matches!(self, ConfigType::U8 | ConfigType::U16 | ConfigType::U32 | ConfigType::U64 | ConfigType::Usize)
+        matches!(
+            self,
+            ConfigType::U8
+                | ConfigType::U16
+                | ConfigType::U32
+                | ConfigType::U64
+                | ConfigType::Usize
+        )
     }
 
     pub fn rust_type(&self) -> &'static str {
@@ -85,6 +92,10 @@ pub struct ConfigItem {
     /// Keys this item depends on (AND relationship).
     #[serde(default)]
     pub depends_on: Vec<String>,
+
+    /// Keys that cannot be enabled together with this item.
+    #[serde(default)]
+    pub conflicts_with: Vec<String>,
 
     /// If true, this option is visible only in expert mode.
     #[serde(default)]
@@ -141,8 +152,7 @@ impl ConfigSchema {
 
     /// Parse TOML schema from string content.
     pub fn from_str(content: &str) -> Result<Self> {
-        let toml: SchemaToml = toml::from_str(content)
-            .context("Failed to parse TOML schema")?;
+        let toml: SchemaToml = toml::from_str(content).context("Failed to parse TOML schema")?;
 
         let mut schema = ConfigSchema {
             lookup: HashMap::with_capacity(toml.items.len()),
@@ -175,7 +185,9 @@ impl ConfigSchema {
             }
 
             // Store menu for UI rendering
-            schema.menu_lookup.insert(menu_key.clone(), schema.menus.len());
+            schema
+                .menu_lookup
+                .insert(menu_key.clone(), schema.menus.len());
             schema.menus.push(menu);
         }
 
@@ -261,6 +273,16 @@ impl ConfigSchema {
                     );
                 }
             }
+
+            for conflict in &item.conflicts_with {
+                if !keys.contains(conflict) {
+                    bail!(
+                        "Config item '{}' conflicts with non-existent key '{}'",
+                        item.key,
+                        conflict
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -269,10 +291,8 @@ impl ConfigSchema {
     fn validate_default_type(value: &toml::Value, expected: ConfigType, key: &str) -> Result<()> {
         // Handle large hex/binary strings as u64 defaults (e.g., "0xFFFF_8000_0000_0000")
         if let toml::Value::String(s) = value {
-            if expected.is_unsigned() {
-                if s.starts_with("0x") || s.starts_with("0b") {
-                    return Ok(());
-                }
+            if expected.is_unsigned() && Self::unsigned_literal_fits(s, expected) {
+                return Ok(());
             }
         }
 
@@ -291,6 +311,12 @@ impl ConfigSchema {
                 value
             ),
         }
+    }
+
+    fn unsigned_literal_fits(s: &str, expected: ConfigType) -> bool {
+        parse_unsigned_literal(s)
+            .map(|value| value <= max_value_for_type(expected))
+            .unwrap_or(false)
     }
 
     /// Get all items that depend on the given key.
@@ -320,6 +346,42 @@ impl ConfigSchema {
         }
         false
     }
+}
+
+fn max_value_for_type(config_type: ConfigType) -> u128 {
+    match config_type {
+        ConfigType::U8 => u8::MAX as u128,
+        ConfigType::U16 => u16::MAX as u128,
+        ConfigType::U32 => u32::MAX as u128,
+        ConfigType::U64 => u64::MAX as u128,
+        ConfigType::Usize => usize::MAX as u128,
+        ConfigType::Bool | ConfigType::String => 0,
+    }
+}
+
+fn parse_unsigned_literal(s: &str) -> Option<u128> {
+    let (base, digits) = if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        (16, rest)
+    } else if let Some(rest) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+        (2, rest)
+    } else {
+        return None;
+    };
+
+    if digits.is_empty() || !digits.chars().any(|c| c != '_') {
+        return None;
+    }
+
+    let mut value = 0u128;
+    for ch in digits.chars() {
+        if ch == '_' {
+            continue;
+        }
+        let digit = ch.to_digit(base)?;
+        value = value.checked_mul(base as u128)?;
+        value = value.checked_add(digit as u128)?;
+    }
+    Some(value)
 }
 
 impl fmt::Display for ConfigType {

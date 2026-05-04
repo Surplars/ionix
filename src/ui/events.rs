@@ -12,7 +12,7 @@
 //! - r: revert item, R: revert all
 //! - +/-: increment/decrement numeric values
 //! - /: search, h: help, x: expert
-//! - j/k or Up/Down: navigate, Left/Right: page up/down
+//! - j/k or Up/Down: navigate, PageUp/PageDown: page up/down
 
 use crate::schema::ConfigType;
 use crate::ui::app::{AppState, FilterMode, ListEntry, SearchMode};
@@ -81,9 +81,13 @@ fn is_modified(app: &AppState) -> bool {
 
 /// Handle a key event. Returns an action for the main loop, or None for navigation/edit.
 pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> Option<KeyAction> {
-    use crossterm::event::KeyCode::*;
+    use crossterm::event::{KeyCode::*, KeyModifiers};
 
     let code = key.code;
+
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(code, Char('s') | Char('S')) {
+        return Some(KeyAction::Save);
+    }
 
     // ----- Save dialog mode: Y/N/Enter/Esc -----
     if app.save_dialog {
@@ -122,17 +126,24 @@ pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> 
                 if is_numeric {
                     if let Ok(val) = value.parse::<i64>() {
                         // Use the key to set the value directly in modified map
-                        let type_ok = app.schema.get(&edit_key).map(|item| {
-                            match item.config_type {
+                        let type_ok = app
+                            .schema
+                            .get(&edit_key)
+                            .map(|item| match item.config_type {
                                 ConfigType::U8 if (0..=255).contains(&val) => true,
                                 ConfigType::U16 if (0..=65535).contains(&val) => true,
-                                ConfigType::U32 | ConfigType::U64 | ConfigType::Usize if val >= 0 => true,
+                                ConfigType::U32 | ConfigType::U64 | ConfigType::Usize
+                                    if val >= 0 =>
+                                {
+                                    true
+                                }
                                 _ => false,
-                            }
-                        }).unwrap_or(false);
+                            })
+                            .unwrap_or(false);
 
                         if type_ok {
-                            app.modified.insert(edit_key.clone(), toml::Value::Integer(val));
+                            app.modified
+                                .insert(edit_key.clone(), toml::Value::Integer(val));
                             app.inline_edit = None;
                             app.set_status(format!("{} = {}", edit_key, val));
                         } else {
@@ -142,7 +153,8 @@ pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> 
                         app.set_error(format!("Invalid number: {}", value));
                     }
                 } else {
-                    app.modified.insert(edit_key.clone(), toml::Value::String(value.clone()));
+                    app.modified
+                        .insert(edit_key.clone(), toml::Value::String(value.clone()));
                     app.inline_edit = None;
                     app.set_status(format!("{} = \"{}\"", edit_key, value));
                 }
@@ -252,7 +264,9 @@ pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> 
     // ----- Search mode: handle text input -----
     if app.search_mode == SearchMode::Searching {
         match code {
-            Enter => { app.exit_search(); }
+            Enter => {
+                app.exit_search();
+            }
             Backspace => {
                 if app.search_query.is_empty() {
                     app.exit_search();
@@ -274,22 +288,31 @@ pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> 
     // ----- Check for menu entry (full-page view) -----
     // Enter on menu header opens full-page menu view
     let menu_to_enter = match app.selected_entry() {
-        Some(ListEntry::Menu { key, .. }) if code == Enter && !app.in_menu() => Some(key.clone()),
+        Some(ListEntry::Menu { key, .. }) if matches!(code, Enter | Right) => Some(key.clone()),
         _ => None,
     };
     if let Some(key) = menu_to_enter {
         app.enter_menu(&key);
-        app.set_status(format!("Entered menu: {}", app.current_menu_name().unwrap_or_default()));
+        app.set_status(format!(
+            "Entered menu: {}",
+            app.current_menu_name().unwrap_or_default()
+        ));
         return None;
     }
 
     // ----- Handle BackMenu (when in submenu, Back entry at bottom) -----
     if let Some(ListEntry::BackMenu { .. }) = app.selected_entry() {
-        if code == Enter || code == Char('e') || code == Char('E') || code == Esc {
+        if matches!(code, Enter | Left | Esc | Char('e') | Char('E')) {
             app.exit_menu();
             app.set_status("Went back");
             return None;
         }
+    }
+
+    if code == Left && app.in_menu() {
+        app.exit_menu();
+        app.set_status("Went back");
+        return None;
     }
 
     // ----- Edit mode (always active): handle value editing -----
@@ -304,12 +327,14 @@ pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> 
     if let Some((idx, cfg_type, key_name)) = item_info {
         match code {
             // Space/y: toggle bool
-            Char(' ') | Char('y') | Char('Y')
-            if cfg_type == ConfigType::Bool =>
-            {
+            Char(' ') | Char('y') | Char('Y') if cfg_type == ConfigType::Bool => {
                 app.toggle_bool(idx);
                 let new_val = app.effective_value(&key_name).as_bool().unwrap_or(false);
-                app.set_status(format!("{} = {}", key_name, if new_val { "true [*]" } else { "false [ ]" }));
+                app.set_status(format!(
+                    "{} = {}",
+                    key_name,
+                    if new_val { "enabled" } else { "disabled" }
+                ));
                 return None;
             }
             // Enter: toggle bool OR enter inline edit for numeric/string
@@ -318,10 +343,17 @@ pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> 
                     ConfigType::Bool => {
                         app.toggle_bool(idx);
                         let new_val = app.effective_value(&key_name).as_bool().unwrap_or(false);
-                        app.set_status(format!("{} = {}", key_name, if new_val { "true [*]" } else { "false [ ]" }));
+                        app.set_status(format!(
+                            "{} = {}",
+                            key_name,
+                            if new_val { "enabled" } else { "disabled" }
+                        ));
                     }
-                    ConfigType::U8 | ConfigType::U16 | ConfigType::U32
-                    | ConfigType::U64 | ConfigType::Usize => {
+                    ConfigType::U8
+                    | ConfigType::U16
+                    | ConfigType::U32
+                    | ConfigType::U64
+                    | ConfigType::Usize => {
                         let current = app.effective_value(&key_name).as_integer().unwrap_or(0);
                         let s = current.to_string();
                         app.inline_edit = Some(crate::ui::app::InlineEdit {
@@ -330,10 +362,17 @@ pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> 
                             cursor: s.len(),
                             is_numeric: true,
                         });
-                        app.set_status(format!("Edit {}: type number, Enter=confirm, Esc=cancel", key_name));
+                        app.set_status(format!(
+                            "Edit {}: type number, Enter=confirm, Esc=cancel",
+                            key_name
+                        ));
                     }
                     ConfigType::String => {
-                        let current = app.effective_value(&key_name).as_str().unwrap_or("").to_string();
+                        let current = app
+                            .effective_value(&key_name)
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
                         let cursor = current.len();
                         app.inline_edit = Some(crate::ui::app::InlineEdit {
                             key: key_name.clone(),
@@ -341,19 +380,28 @@ pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> 
                             cursor,
                             is_numeric: false,
                         });
-                        app.set_status(format!("Edit {}: type value, Enter=confirm, Esc=cancel", key_name));
+                        app.set_status(format!(
+                            "Edit {}: type value, Enter=confirm, Esc=cancel",
+                            key_name
+                        ));
                     }
                 }
                 return None;
             }
             // n: force false (bool only)
             Char('n') | Char('N') if cfg_type == ConfigType::Bool => {
-                app.modified.insert(key_name.clone(), toml::Value::Boolean(false));
-                app.set_status(format!("{} = false [ ]", key_name));
+                app.modified
+                    .insert(key_name.clone(), toml::Value::Boolean(false));
+                app.recompute_current_filter_preserving(&key_name);
+                app.set_status(format!("{} = disabled", key_name));
                 return None;
             }
             // r: revert item
-            Char('r') if !key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) => {
+            Char('r')
+                if !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT) =>
+            {
                 app.revert_item(&key_name);
                 app.set_status(format!("Reverted {}", key_name));
                 return None;
@@ -387,12 +435,16 @@ pub fn handle_key_event(app: &mut AppState, key: crossterm::event::KeyEvent) -> 
     match code {
         Up | Char('k') => app.move_up(),
         Down | Char('j') => app.move_down(),
-        Left => app.move_page_up(),
-        Right => app.move_page_down(),
         PageUp => app.move_page_up(),
         PageDown => app.move_page_down(),
-        Home => { app.selected_index = 0; app.scroll_offset = 0; }
-        End => { app.selected_index = app.list_entries.len().saturating_sub(1); }
+        Home => {
+            app.selected_index = 0;
+            app.scroll_offset = 0;
+        }
+        End => {
+            app.selected_index = app.list_entries.len().saturating_sub(1);
+            app.ensure_selected_visible();
+        }
         _ => {}
     }
 
@@ -460,12 +512,12 @@ default = 42
     #[test]
     fn test_esc_shows_save_dialog_when_modified() {
         let mut app = make_test_app();
-        app.modified.insert("TEST_BOOL".to_string(), toml::Value::Boolean(true));
+        app.modified
+            .insert("TEST_BOOL".to_string(), toml::Value::Boolean(true));
         let action = handle_key_event(&mut app, key(crossterm::event::KeyCode::Esc));
         assert_eq!(action, None);
         assert!(app.save_dialog);
     }
-
 
     #[test]
     fn test_enter_numeric_opens_inline_edit() {

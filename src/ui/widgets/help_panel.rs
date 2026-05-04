@@ -48,35 +48,30 @@ impl StatefulWidget for HelpPanel {
         block.render(area, buf);
 
         if !state.show_help {
-            let msg = Line::raw(" Help panel hidden (press H to show)");
-            buf.set_line(inner.x + 1, inner.y + 1, &msg, inner.width - 2);
-            return;
-
-    // Handle menu header or exit entry
-    match state.selected_entry() {
-        Some(ListEntry::BackMenu { .. }) => {
-            let msg = Line::styled(
-                " [Enter/Esc] Go back",
-                Style::default().fg(Color::Magenta),
-            );
-            buf.set_line(inner.x + 1, inner.y + 1, &msg, inner.width - 2);
+            let msg = Line::raw(" Help hidden. Press H to show details.");
+            buf.set_line(inner.x + 1, inner.y, &msg, inner.width.saturating_sub(2));
             return;
         }
-        Some(ListEntry::Menu { name, .. }) => {
-            let msg = Line::styled(
-                format!(" Menu: {} - [Enter] Open", name),
-                Style::default().fg(Color::Cyan),
-            );
-            buf.set_line(inner.x + 1, inner.y + 1, &msg, inner.width - 2);
-            return;
-        }
-        _ => {}
-    }
 
+        match state.selected_entry() {
+            Some(ListEntry::BackMenu { .. }) => {
+                let msg = Line::styled(" Enter/Esc: go back", Style::default().fg(Color::Magenta));
+                buf.set_line(inner.x + 1, inner.y, &msg, inner.width.saturating_sub(2));
+                return;
+            }
+            Some(ListEntry::Menu { name, .. }) => {
+                let msg = Line::styled(
+                    format!(" Menu: {} | Enter: open", name),
+                    Style::default().fg(Color::Cyan),
+                );
+                buf.set_line(inner.x + 1, inner.y, &msg, inner.width.saturating_sub(2));
+                return;
+            }
+            _ => {}
         }
 
         if let Some((_, item)) = state.selected_item() {
-            let mut y = inner.y + 1;
+            let mut y = inner.y;
 
             // Item name
             let name_line = Line::styled(
@@ -90,8 +85,7 @@ impl StatefulWidget for HelpPanel {
             let default_str = state.display_value(item);
             let type_line = Line::raw(format!(
                 " Type: {}, Value: {}",
-                item.config_type,
-                default_str
+                item.config_type, default_str
             ));
             buf.set_line(inner.x + 1, y, &type_line, inner.width - 2);
             y += 1;
@@ -122,6 +116,15 @@ impl StatefulWidget for HelpPanel {
                 y += 1;
             }
 
+            if !item.conflicts_with.is_empty() {
+                let conflict_line = Line::styled(
+                    format!(" Conflicts: {}", item.conflicts_with.join(", ")),
+                    Style::default().fg(Color::Yellow),
+                );
+                buf.set_line(inner.x + 1, y, &conflict_line, inner.width - 2);
+                y += 1;
+            }
+
             // Flags
             let mut flags = Vec::new();
             if item.expert {
@@ -144,9 +147,10 @@ impl StatefulWidget for HelpPanel {
             // Help text (word wrap)
             if !item.help.is_empty() {
                 let wrapped = Self::wrap_text(&item.help, inner.width as usize - 4);
-                for line in wrapped.into_iter().take(HELP_LINES.saturating_sub(
-                    (y - inner.y) as usize
-                )) {
+                for line in wrapped
+                    .into_iter()
+                    .take(HELP_LINES.saturating_sub((y - inner.y) as usize))
+                {
                     let help_line = Line::raw(format!(" {}", line));
                     buf.set_line(inner.x + 1, y, &help_line, inner.width - 2);
                     y += 1;
@@ -158,13 +162,10 @@ impl StatefulWidget for HelpPanel {
 
             // Edit hint
             let edit_hint = match item.config_type {
-                crate::schema::ConfigType::Bool => " [Enter/Space/y] Toggle | [n] Set false",
-                _ => " [Enter] Edit | [+/-] Adjust",
+                crate::schema::ConfigType::Bool => " Enter/Space: toggle | n: set off | r: revert",
+                _ => " Enter: edit | +/-: adjust | r: revert",
             };
-            let hint_line = Line::styled(
-                edit_hint,
-                Style::default().fg(Color::Green),
-            );
+            let hint_line = Line::styled(edit_hint, Style::default().fg(Color::Green));
             if y < inner.y + inner.height {
                 buf.set_line(inner.x + 1, y, &hint_line, inner.width - 2);
             }

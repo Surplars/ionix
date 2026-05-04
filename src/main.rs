@@ -14,8 +14,6 @@ mod ui;
 use anyhow::{Context, Result};
 use clap::Parser;
 use config::ConfigLoader;
-use config::loader::LoadResult;
-use schema::codegen::ConfigValues;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use schema::ConfigSchema;
@@ -82,7 +80,10 @@ fn main() -> Result<()> {
     // If config_path is specified but doesn't exist, warn and continue with defaults
     if let Some(ref config_path) = args.config_path {
         if !config_path.exists() {
-            eprintln!("Warning: Config file '{}' does not exist, using defaults.", config_path.display());
+            eprintln!(
+                "Warning: Config file '{}' does not exist, using defaults.",
+                config_path.display()
+            );
         } else {
             // Config exists - validate it matches schema strictly
             let loader = ConfigLoader::new(
@@ -102,7 +103,11 @@ fn main() -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error: Config file '{}' is invalid: {}", config_path.display(), e);
+                    eprintln!(
+                        "Error: Config file '{}' is invalid: {}",
+                        config_path.display(),
+                        e
+                    );
                     std::process::exit(1);
                 }
             }
@@ -113,7 +118,11 @@ fn main() -> Result<()> {
         run_batch(&schema, &args)?;
     } else {
         // Track if user provided an external config file
-        let has_external_config = args.config_path.as_ref().map(|p| p.exists()).unwrap_or(false);
+        let has_external_config = args
+            .config_path
+            .as_ref()
+            .map(|p| p.exists())
+            .unwrap_or(false);
         run_tui(&schema, &args, has_external_config)?;
     }
 
@@ -122,6 +131,7 @@ fn main() -> Result<()> {
 
 fn run_tui(schema: &ConfigSchema, args: &Args, has_external_config: bool) -> Result<()> {
     crossterm::terminal::enable_raw_mode()?;
+    crossterm::execute!(io::stdout(), crossterm::cursor::Hide)?;
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -131,7 +141,9 @@ fn run_tui(schema: &ConfigSchema, args: &Args, has_external_config: bool) -> Res
 
     let loader = ConfigLoader::new(
         args.schema_path.clone(),
-        args.export_path.clone().unwrap_or_else(|| std::path::PathBuf::from("generated_config.rs")),
+        args.export_path
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("generated_config.rs")),
     );
 
     // Try to load config if specified and exists
@@ -151,7 +163,6 @@ fn run_tui(schema: &ConfigSchema, args: &Args, has_external_config: bool) -> Res
     while running {
         terminal.draw(|f| {
             let size = f.area();
-            app.visible_height = (size.height as usize).saturating_sub(20).max(5);
             render_ui(f, &mut app, size);
         })?;
 
@@ -164,11 +175,16 @@ fn run_tui(schema: &ConfigSchema, args: &Args, has_external_config: bool) -> Res
                         // - External config exists: only save if modified
                         let should_save = !has_external_config || !app.modified.is_empty();
                         if should_save {
-                            let values = ConfigLoader::merge_with_defaults(&app.modified, &app.schema);
-                            match loader.save_to_cwd(&values) {
+                            let values = app.effective_values();
+                            match loader.save_with_schema_if_changed(
+                                &values,
+                                &app.schema,
+                                std::path::Path::new(".config.toml"),
+                                Some(std::path::Path::new(".config.old.toml")),
+                            ) {
                                 Ok(true) => {
-                                    let _ = loader.generate(&app.schema, &app.modified);
-                                    println!("Saved config to config.toml");
+                                    let _ = loader.generate(&app.schema, &values);
+                                    println!("Saved config to .config.toml");
                                 }
                                 Ok(false) => {}
                                 Err(e) => {
@@ -182,11 +198,16 @@ fn run_tui(schema: &ConfigSchema, args: &Args, has_external_config: bool) -> Res
                         // Same logic as Quit
                         let should_save = !has_external_config || !app.modified.is_empty();
                         if should_save {
-                            let values = ConfigLoader::merge_with_defaults(&app.modified, &app.schema);
-                            match loader.save_to_cwd(&values) {
+                            let values = app.effective_values();
+                            match loader.save_with_schema_if_changed(
+                                &values,
+                                &app.schema,
+                                std::path::Path::new(".config.toml"),
+                                Some(std::path::Path::new(".config.old.toml")),
+                            ) {
                                 Ok(true) => {
-                                    let _ = loader.generate(&app.schema, &app.modified);
-                                    println!("Saved config to config.toml");
+                                    let _ = loader.generate(&app.schema, &values);
+                                    println!("Saved config to .config.toml");
                                 }
                                 Ok(false) => {}
                                 Err(e) => {
@@ -198,11 +219,16 @@ fn run_tui(schema: &ConfigSchema, args: &Args, has_external_config: bool) -> Res
                     }
                     Some(KeyAction::Save) => {
                         // Manual save (for explicit save before exit)
-                        let values = ConfigLoader::merge_with_defaults(&app.modified, &app.schema);
-                        match loader.save_to_cwd(&values) {
+                        let values = app.effective_values();
+                        match loader.save_with_schema_if_changed(
+                            &values,
+                            &app.schema,
+                            std::path::Path::new(".config.toml"),
+                            Some(std::path::Path::new(".config.old.toml")),
+                        ) {
                             Ok(true) => {
-                                let _ = loader.generate(&app.schema, &app.modified);
-                                app.set_status("Saved -> config.toml".to_string());
+                                let _ = loader.generate(&app.schema, &values);
+                                app.set_status("Saved -> .config.toml".to_string());
                             }
                             Ok(false) => {
                                 app.set_status("No changes to save".to_string());
@@ -214,11 +240,16 @@ fn run_tui(schema: &ConfigSchema, args: &Args, has_external_config: bool) -> Res
                     }
                     Some(KeyAction::SaveAndQuit) => {
                         // Save and quit
-                        let values = ConfigLoader::merge_with_defaults(&app.modified, &app.schema);
-                        match loader.save_to_cwd(&values) {
+                        let values = app.effective_values();
+                        match loader.save_with_schema_if_changed(
+                            &values,
+                            &app.schema,
+                            std::path::Path::new(".config.toml"),
+                            Some(std::path::Path::new(".config.old.toml")),
+                        ) {
                             Ok(true) => {
-                                let _ = loader.generate(&app.schema, &app.modified);
-                                println!("Saved config to config.toml");
+                                let _ = loader.generate(&app.schema, &values);
+                                println!("Saved config to .config.toml");
                             }
                             Ok(false) => {}
                             Err(e) => {
@@ -235,63 +266,72 @@ fn run_tui(schema: &ConfigSchema, args: &Args, has_external_config: bool) -> Res
         }
     }
 
-    // Clean up terminal properly
+    restore_terminal()?;
+    println!("Goodbye!");
+
+    Ok(())
+}
+
+fn restore_terminal() -> Result<()> {
     crossterm::terminal::disable_raw_mode()?;
-    // Reset terminal: clear screen, move cursor to top-left, show cursor
     crossterm::execute!(
         io::stdout(),
         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
         crossterm::cursor::MoveTo(0, 0),
         crossterm::cursor::Show
     )?;
-    println!("Goodbye!");
-
     Ok(())
 }
 
 fn run_batch(schema: &ConfigSchema, args: &Args) -> Result<()> {
-    let config_path = args.config_path.clone();
-
-    let loader = ConfigLoader::new(
-        args.schema_path.clone(),
-        args.export_path.clone().unwrap_or_else(|| std::path::PathBuf::from("generated_config.rs")),
-    );
-
-    let result = if let Some(ref path) = config_path {
-        if path.exists() {
-            loader.load(Some(path))?
-        } else {
-            loader.load(None)?
-        }
-    } else {
-        loader.load(None)?
-    };
-
-    let values = ConfigLoader::merge_with_defaults(&result.values, schema);
-
-    // Default output path is generated_config.rs
-    let output_path = args.export_path.clone().unwrap_or_else(|| std::path::PathBuf::from("generated_config.rs"));
-    loader.generate(schema, &values)?;
+    let _ = schema;
+    let config_path = args
+        .config_path
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from(".config.toml"));
+    let output_path = args
+        .export_path
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("generated_config.rs"));
+    ionix::prepare(
+        ionix::PrepareOptions::new(&args.schema_path, &config_path, &output_path)
+            .with_backup_path(std::path::PathBuf::from(".config.old.toml")),
+    )?;
     println!("Generated: {}", output_path.display());
 
     Ok(())
 }
 
-fn render_ui(
-    f: &mut ratatui::Frame,
-    app: &mut AppState,
-    size: ratatui::layout::Rect,
-) {
+fn render_ui(f: &mut ratatui::Frame, app: &mut AppState, size: ratatui::layout::Rect) {
     use ratatui::layout::{Constraint, Direction, Layout};
+
+    if size.height < 10 || size.width < 48 {
+        let area = size;
+        app.set_visible_height(area.height.saturating_sub(2) as usize);
+        let list = ConfigList::new();
+        f.render_stateful_widget(list, area, app);
+        if app.save_dialog {
+            render_save_dialog(f, size);
+        }
+        return;
+    }
+
+    let help_height = if app.show_help {
+        size.height.saturating_sub(10).min(10).max(5)
+    } else {
+        3
+    };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(10),
-            Constraint::Length(12),
+            Constraint::Min(6),
+            Constraint::Length(help_height),
             Constraint::Length(3),
         ])
         .split(size);
+
+    app.set_visible_height(chunks[0].height.saturating_sub(2) as usize);
 
     let list = ConfigList::new();
     f.render_stateful_widget(list, chunks[0], app);
@@ -336,18 +376,12 @@ fn render_save_dialog(f: &mut ratatui::Frame, size: ratatui::layout::Rect) {
             " You have unsaved changes.",
             Style::default().fg(Color::White),
         ),
-        Line::styled(
-            "",
-            Style::default(),
-        ),
+        Line::styled("", Style::default()),
         Line::styled(
             " [Y] Save and quit [N] Quit without save",
             Style::default().fg(Color::Cyan),
         ),
-        Line::styled(
-            " [Esc] Cancel",
-            Style::default().fg(Color::DarkGray),
-        ),
+        Line::styled(" [Esc] Cancel", Style::default().fg(Color::DarkGray)),
     ];
 
     let para = Paragraph::new(lines);

@@ -52,11 +52,19 @@ impl StatefulWidget for StatusBar {
         } else {
             ("[EDIT] ", Color::Green)
         };
-        spans.push(Span::styled(mode_str, Style::default().fg(mode_color).add_modifier(ratatui::style::Modifier::BOLD)));
+        spans.push(Span::styled(
+            mode_str,
+            Style::default()
+                .fg(mode_color)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ));
 
         // Expert mode
         if state.expert_mode {
-            spans.push(Span::styled("[EXPERT] ", Style::default().fg(Color::Yellow)));
+            spans.push(Span::styled(
+                "[EXPERT] ",
+                Style::default().fg(Color::Yellow),
+            ));
         }
 
         // Status message
@@ -69,11 +77,12 @@ impl StatefulWidget for StatusBar {
         let stats = state.stats();
         let stats_str = format!(
             " {}/{} | {} modified",
-            stats.visible,
-            stats.total,
-            stats.modified,
+            stats.visible, stats.total, stats.modified,
         );
-        spans.push(Span::styled(stats_str, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            stats_str,
+            Style::default().fg(Color::DarkGray),
+        ));
 
         let line = Line::from(spans);
         buf.set_line(inner.x, inner.y, &line, inner.width);

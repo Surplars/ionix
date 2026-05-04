@@ -31,11 +31,84 @@
 pub mod config;
 pub mod schema;
 
-use anyhow::{Context, Result};
-use schema::codegen::ConfigValues;
 use crate::schema::ConfigSchema;
+use anyhow::{bail, Context, Result};
 pub use config::ConfigLoader;
+use schema::codegen::ConfigValues;
 pub use schema::ConfigType;
+use std::path::{Path, PathBuf};
+
+/// Options for preparing a complete config file and generated Rust output.
+#[derive(Debug, Clone)]
+pub struct PrepareOptions {
+    pub schema_path: PathBuf,
+    pub config_path: PathBuf,
+    pub output_path: PathBuf,
+    pub backup_path: Option<PathBuf>,
+    pub overrides: ConfigValues,
+}
+
+impl PrepareOptions {
+    pub fn new(
+        schema_path: impl Into<PathBuf>,
+        config_path: impl Into<PathBuf>,
+        output_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            schema_path: schema_path.into(),
+            config_path: config_path.into(),
+            output_path: output_path.into(),
+            backup_path: None,
+            overrides: ConfigValues::new(),
+        }
+    }
+
+    pub fn with_backup_path(mut self, backup_path: impl Into<PathBuf>) -> Self {
+        self.backup_path = Some(backup_path.into());
+        self
+    }
+
+    pub fn with_overrides(mut self, overrides: ConfigValues) -> Self {
+        self.overrides = overrides;
+        self
+    }
+}
+
+/// Result of preparing configuration.
+#[derive(Debug, Clone)]
+pub struct PrepareResult {
+    pub values: ConfigValues,
+    pub config_written: bool,
+}
+
+/// Load schema/config, merge defaults, apply optional overrides, validate, save
+/// the full config file, then generate Rust constants.
+pub fn prepare(options: PrepareOptions) -> Result<PrepareResult> {
+    let schema = ConfigSchema::from_path(&options.schema_path)
+        .with_context(|| format!("Failed to load schema: {}", options.schema_path.display()))?;
+    let loader = ConfigLoader::new(&options.schema_path, &options.output_path);
+    let loaded = loader.load(Some(&options.config_path))?;
+    let mut values = ConfigLoader::merge_with_defaults(&loaded.values, &schema);
+
+    for (key, value) in options.overrides {
+        values.insert(key, value);
+    }
+
+    validate_values(&values, &schema)?;
+
+    let config_written = loader.save_with_schema_if_changed(
+        &values,
+        &schema,
+        &options.config_path,
+        options.backup_path.as_deref(),
+    )?;
+    loader.generate(&schema, &values)?;
+
+    Ok(PrepareResult {
+        values,
+        config_written,
+    })
+}
 
 /// Generate Rust config code from a schema file.
 ///
@@ -50,7 +123,7 @@ pub use schema::ConfigType;
 /// ```rust,no_run
 /// ionix::generate("kernel.kconfig", "generated_config.rs")?;
 /// ```
-pub fn generate(schema_path: impl AsRef<std::path::Path>, output_path: impl AsRef<std::path::Path>) -> Result<()> {
+pub fn generate(schema_path: impl AsRef<Path>, output_path: impl AsRef<Path>) -> Result<()> {
     let schema_path = schema_path.as_ref();
     let output_path = output_path.as_ref();
 
@@ -62,6 +135,10 @@ pub fn generate(schema_path: impl AsRef<std::path::Path>, output_path: impl AsRe
     let result = config_loader.load(None)?;
 
     let values = ConfigLoader::merge_with_defaults(&result.values, &schema);
+    let errors = ConfigLoader::validate(&values, &schema);
+    if !errors.is_empty() {
+        bail!("config validation failed:\n{}", errors.join("\n"));
+    }
 
     // Ensure output directory exists
     if let Some(parent) = output_path.parent() {
@@ -81,8 +158,8 @@ pub fn generate(schema_path: impl AsRef<std::path::Path>, output_path: impl AsRe
 ///
 /// Returns the merged configuration values ready for code generation.
 pub fn load_config(
-    schema_path: impl AsRef<std::path::Path>,
-    config_path: Option<impl AsRef<std::path::Path>>,
+    schema_path: impl AsRef<Path>,
+    config_path: Option<impl AsRef<Path>>,
 ) -> Result<config::loader::LoadResult> {
     let schema_path = schema_path.as_ref();
     let loader = ConfigLoader::new(schema_path, std::path::PathBuf::from("dummy.rs"));
@@ -94,9 +171,9 @@ pub fn load_config(
 
 /// Generate Rust config code with explicit values.
 pub fn generate_with_config(
-    schema_path: impl AsRef<std::path::Path>,
-    output_path: impl AsRef<std::path::Path>,
-    config_path: Option<impl AsRef<std::path::Path>>,
+    schema_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    config_path: Option<impl AsRef<Path>>,
 ) -> Result<()> {
     let schema_path = schema_path.as_ref();
     let output_path = output_path.as_ref();
@@ -111,6 +188,7 @@ pub fn generate_with_config(
     };
 
     let values = ConfigLoader::merge_with_defaults(&result.values, &schema);
+    validate_values(&values, &schema)?;
 
     if let Some(parent) = output_path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -130,7 +208,7 @@ pub fn generate_with_config(
 /// # Arguments
 /// * `schema_path` - Path to the TOML schema file
 /// * `config_path` - Path to the config file to annotate
-pub fn diff(schema_path: impl AsRef<std::path::Path>, config_path: impl AsRef<std::path::Path>) -> Result<()> {
+pub fn diff(schema_path: impl AsRef<Path>, config_path: impl AsRef<Path>) -> Result<()> {
     let schema_path = schema_path.as_ref();
     let config_path = config_path.as_ref();
 
@@ -168,7 +246,8 @@ pub fn diff(schema_path: impl AsRef<std::path::Path>, config_path: impl AsRef<st
     unknown.sort_by(|a, b| b.len().cmp(&a.len()));
 
     // Calculate max line length for alignment
-    let max_line_len = clean_content.lines()
+    let max_line_len = clean_content
+        .lines()
         .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
         .map(|l| l.len())
         .max()
@@ -196,7 +275,11 @@ pub fn diff(schema_path: impl AsRef<std::path::Path>, config_path: impl AsRef<st
         }
 
         // Extract the key from this line (key is at the start, before =)
-        let line_key = trimmed.split(|c| c == '=' || c == ' ').next().unwrap_or("").trim();
+        let line_key = trimmed
+            .split(|c| c == '=' || c == ' ')
+            .next()
+            .unwrap_or("")
+            .trim();
 
         let is_unknown = unknown.iter().any(|k| k == line_key);
         if is_unknown {
@@ -220,13 +303,25 @@ pub fn diff(schema_path: impl AsRef<std::path::Path>, config_path: impl AsRef<st
     if missing.is_empty() && unknown.is_empty() {
         output.push_str("\n# No differences found - config matches schema.\n");
     } else {
-        output.push_str(&format!("\n# Summary: {} missing, {} unknown\n", missing.len(), unknown.len()));
+        output.push_str(&format!(
+            "\n# Summary: {} missing, {} unknown\n",
+            missing.len(),
+            unknown.len()
+        ));
     }
 
     // Write back to config file
     std::fs::write(config_path, &output)
         .with_context(|| format!("Failed to write config: {}", config_path.display()))?;
 
+    Ok(())
+}
+
+pub fn validate_values(values: &ConfigValues, schema: &ConfigSchema) -> Result<()> {
+    let errors = ConfigLoader::validate(values, schema);
+    if !errors.is_empty() {
+        bail!("config validation failed:\n{}", errors.join("\n"));
+    }
     Ok(())
 }
 

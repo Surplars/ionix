@@ -53,8 +53,6 @@ impl<'a> CodeGenerator<'a> {
         out.push_str("//! Auto-generated configuration file.\n");
         out.push_str("//! Do not edit manually - use ionix TUI instead.\n\n");
         out.push_str("#![allow(unused)]\n\n");
-        out.push_str("use std::sync::OnceLock;\n\n");
-        out.push_str("static CONFIG_LOCK: OnceLock<()> = OnceLock::new();\n\n");
     }
 
     fn write_items(&self, out: &mut String) {
@@ -88,23 +86,16 @@ impl<'a> CodeGenerator<'a> {
                 ));
             }
             ConfigType::U64 => {
-                // Check if the default is a hex/binary string literal (e.g., "0xFFFF_8000_0000_0000")
-                let default = self.schema.get(&item.key).map(|i| &i.default);
-                let val_str = if let Some(toml::Value::String(s)) = default {
-                    if s.starts_with("0x") || s.starts_with("0b") {
-                        s.clone()
-                    } else {
-                        self.get_int(&item.key).to_string()
-                    }
-                } else {
-                    self.get_int(&item.key).to_string()
-                };
+                let val_str = self.get_unsigned_literal(&item.key);
                 out.push_str(&format!("pub const {}: u64 = {};\n", item.key, val_str));
             }
             ConfigType::U8 | ConfigType::U16 | ConfigType::U32 | ConfigType::Usize => {
-                let val = self.get_int(&item.key);
                 let rust_type = item.config_type.rust_type();
-                out.push_str(&format!("pub const {}: {} = {};\n", item.key, rust_type, val));
+                let val = self.get_unsigned_literal(&item.key);
+                out.push_str(&format!(
+                    "pub const {}: {} = {};\n",
+                    item.key, rust_type, val
+                ));
             }
         }
         out.push('\n');
@@ -122,16 +113,17 @@ impl<'a> CodeGenerator<'a> {
             })
     }
 
-    fn get_int(&self, key: &str) -> i64 {
-        self.values
+    fn get_unsigned_literal(&self, key: &str) -> String {
+        let value = self
+            .values
             .get(key)
-            .and_then(|v| v.as_integer())
-            .unwrap_or_else(|| {
-                self.schema
-                    .get(key)
-                    .and_then(|i| i.default.as_integer())
-                    .unwrap_or(0)
-            })
+            .or_else(|| self.schema.get(key).map(|i| &i.default));
+
+        match value {
+            Some(toml::Value::String(s)) if Self::is_unsigned_literal(s) => s.clone(),
+            Some(toml::Value::Integer(i)) if *i >= 0 => i.to_string(),
+            _ => "0".to_string(),
+        }
     }
 
     fn get_string(&self, key: &str) -> String {
@@ -165,6 +157,35 @@ impl<'a> CodeGenerator<'a> {
         out.push('"');
         out
     }
+
+    fn is_unsigned_literal(s: &str) -> bool {
+        parse_unsigned_literal(s).is_some()
+    }
+}
+
+fn parse_unsigned_literal(s: &str) -> Option<u128> {
+    let (base, digits) = if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        (16, rest)
+    } else if let Some(rest) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+        (2, rest)
+    } else {
+        return None;
+    };
+
+    if digits.is_empty() || !digits.chars().any(|c| c != '_') {
+        return None;
+    }
+
+    let mut value = 0u128;
+    for ch in digits.chars() {
+        if ch == '_' {
+            continue;
+        }
+        let digit = ch.to_digit(base)?;
+        value = value.checked_mul(base as u128)?;
+        value = value.checked_add(digit as u128)?;
+    }
+    Some(value)
 }
 
 impl fmt::Display for CodeGenerator<'_> {
