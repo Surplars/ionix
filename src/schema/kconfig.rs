@@ -23,6 +23,9 @@ pub struct ConfigMenu {
     /// Keys this menu depends on (AND relationship) - menu only visible when deps are met
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Parent menu key for UI nesting. This is independent from config dependencies.
+    #[serde(default)]
+    pub parent: Option<String>,
     /// Child config items in this menu (inline in TOML)
     #[serde(default)]
     pub items: Vec<ConfigItem>,
@@ -258,6 +261,7 @@ impl ConfigSchema {
     /// Validate the schema for consistency.
     fn validate(&self) -> Result<()> {
         let keys: HashSet<_> = self.items.iter().map(|i| &i.key).collect();
+        let menu_keys: HashSet<_> = self.menus.iter().map(|m| &m.key).collect();
 
         for item in &self.items {
             // Validate default value type matches config type
@@ -282,6 +286,40 @@ impl ConfigSchema {
                         conflict
                     );
                 }
+            }
+        }
+
+        for menu in &self.menus {
+            if let Some(parent) = &menu.parent {
+                if !menu_keys.contains(parent) {
+                    bail!("Menu '{}' has non-existent parent '{}'", menu.key, parent);
+                }
+                if parent == &menu.key {
+                    bail!("Menu '{}' cannot be its own parent", menu.key);
+                }
+            }
+
+            for dep in &menu.depends_on {
+                if !keys.contains(dep) {
+                    bail!(
+                        "Menu '{}' depends on non-existent config key '{}'",
+                        menu.key,
+                        dep
+                    );
+                }
+            }
+        }
+
+        for menu in &self.menus {
+            let mut seen = HashSet::new();
+            let mut current = menu.parent.as_deref();
+            while let Some(parent_key) = current {
+                if !seen.insert(parent_key) {
+                    bail!("Menu '{}' has a cyclic parent chain", menu.key);
+                }
+                current = self
+                    .get_menu(parent_key)
+                    .and_then(|parent| parent.parent.as_deref());
             }
         }
 
@@ -467,6 +505,51 @@ name = "Test"
 key = "TEST"
 type = "bool"
 default = "not a bool"
+"#;
+        assert!(ConfigSchema::from_str(toml).is_err());
+    }
+
+    #[test]
+    fn test_nested_menu_parent() {
+        let toml = r#"
+[[menus]]
+name = "Kernel"
+key = "KERNEL"
+
+[[menus]]
+name = "Scheduler"
+key = "SCHED"
+parent = "KERNEL"
+
+[[menus.items]]
+name = "Tick Rate"
+key = "TICK_RATE"
+type = "u32"
+default = 1000
+"#;
+        let schema = ConfigSchema::from_str(toml).unwrap();
+        assert_eq!(
+            schema.get_menu("SCHED").unwrap().parent.as_deref(),
+            Some("KERNEL")
+        );
+        assert_eq!(
+            schema.get("TICK_RATE").unwrap().menu.as_deref(),
+            Some("SCHED")
+        );
+    }
+
+    #[test]
+    fn test_nested_menu_cycle_is_rejected() {
+        let toml = r#"
+[[menus]]
+name = "A"
+key = "A"
+parent = "B"
+
+[[menus]]
+name = "B"
+key = "B"
+parent = "A"
 "#;
         assert!(ConfigSchema::from_str(toml).is_err());
     }

@@ -121,7 +121,10 @@ pub fn prepare(options: PrepareOptions) -> Result<PrepareResult> {
 /// # Example
 ///
 /// ```rust,no_run
-/// ionix::generate("kernel.kconfig", "generated_config.rs")?;
+/// fn main() -> anyhow::Result<()> {
+///     ionix::generate("kernel.kconfig", "generated_config.rs")?;
+///     Ok(())
+/// }
 /// ```
 pub fn generate(schema_path: impl AsRef<Path>, output_path: impl AsRef<Path>) -> Result<()> {
     let schema_path = schema_path.as_ref();

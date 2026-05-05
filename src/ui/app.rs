@@ -86,10 +86,8 @@ pub struct AppState {
     /// All visible entries (including menu headers) for current filter
     pub list_entries: Vec<ListEntry>,
 
-    /// When in a submenu, this is the menu key. None = at root.
-    pub current_menu: Option<String>,
-    /// Parent menu key (for back navigation)
-    pub parent_menu: Option<String>,
+    /// Path from root to the current menu. Empty = at root.
+    pub menu_stack: Vec<String>,
 }
 
 impl AppState {
@@ -128,16 +126,13 @@ impl AppState {
             config_path: None,
             expanded_menus,
             list_entries,
-            current_menu: None,
-            parent_menu: None,
+            menu_stack: Vec::new(),
         }
     }
 
     /// Enter a submenu (full-page view)
     pub fn enter_menu(&mut self, menu_key: &str) {
-        // Set current menu as parent before entering
-        self.parent_menu = self.current_menu.clone();
-        self.current_menu = Some(menu_key.to_string());
+        self.menu_stack.push(menu_key.to_string());
         self.selected_index = 0;
         self.scroll_offset = 0;
         self.recompute_list();
@@ -145,8 +140,7 @@ impl AppState {
 
     /// Exit current submenu and return to parent (or root if no parent)
     pub fn exit_menu(&mut self) {
-        self.current_menu = self.parent_menu.clone();
-        self.parent_menu = None; // Clear grandparent
+        self.menu_stack.pop();
         self.selected_index = 0;
         self.scroll_offset = 0;
         self.recompute_list();
@@ -154,8 +148,7 @@ impl AppState {
 
     /// Go back to root (from anywhere)
     pub fn go_to_root(&mut self) {
-        self.current_menu = None;
-        self.parent_menu = None;
+        self.menu_stack.clear();
         self.selected_index = 0;
         self.scroll_offset = 0;
         self.recompute_list();
@@ -163,13 +156,17 @@ impl AppState {
 
     /// Check if currently in a submenu.
     pub fn in_menu(&self) -> bool {
-        self.current_menu.is_some()
+        !self.menu_stack.is_empty()
+    }
+
+    /// Get current menu key.
+    pub fn current_menu_key(&self) -> Option<&str> {
+        self.menu_stack.last().map(String::as_str)
     }
 
     /// Get current menu name for title bar.
     pub fn current_menu_name(&self) -> Option<String> {
-        self.current_menu
-            .as_ref()
+        self.current_menu_key()
             .and_then(|key| self.schema.get_menu(key).map(|m| m.name.clone()))
     }
 
@@ -187,7 +184,19 @@ impl AppState {
 
         // If in a menu, show only that menu's items (full-page view)
         if let Some(menu_key) = current_menu {
-            // Show items in this menu
+            // Show child menus first so deeper categories remain prominent.
+            for menu in schema.menus() {
+                if menu.parent.as_deref() == Some(menu_key) {
+                    let expanded = *expanded_menus.get(&menu.key).unwrap_or(&true);
+                    entries.push(ListEntry::Menu {
+                        key: menu.key.clone(),
+                        name: menu.name.clone(),
+                        expanded,
+                    });
+                }
+            }
+
+            // Then show items directly in this menu.
             if let Some(items) = items_by_menu.get(&Some(menu_key.to_string())) {
                 let filtered_items: Vec<_> = items
                     .iter()
@@ -203,19 +212,6 @@ impl AppState {
                             item: (*item).clone(),
                         });
                     }
-                }
-            }
-
-            // Check if this menu has submenus - add them as menu entries
-            for menu in schema.menus() {
-                // Check if this menu is a child of current menu (depends on current menu)
-                if menu.depends_on.iter().any(|d| d == menu_key) {
-                    let expanded = *expanded_menus.get(&menu.key).unwrap_or(&true);
-                    entries.push(ListEntry::Menu {
-                        key: menu.key.clone(),
-                        name: menu.name.clone(),
-                        expanded,
-                    });
                 }
             }
 
@@ -247,10 +243,9 @@ impl AppState {
             }
         }
 
-        // Then show top-level menus (menus with no dependencies)
+        // Then show top-level menus
         for menu in schema.menus() {
-            // Skip menus that have dependencies (they are submenus)
-            if !menu.depends_on.is_empty() {
+            if menu.parent.is_some() {
                 continue;
             }
 
@@ -297,7 +292,7 @@ impl AppState {
             &self.schema,
             &self.filtered_indices,
             &self.expanded_menus,
-            self.current_menu.as_deref(),
+            self.current_menu_key(),
         );
         // Clamp selected index
         if self.selected_index >= self.list_entries.len() {
@@ -673,4 +668,53 @@ pub struct ConfigStats {
     pub modified: usize,
     pub expert: usize,
     pub visible: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nested_menu_app() -> AppState {
+        let toml = r#"
+[[menus]]
+name = "Kernel"
+key = "KERNEL"
+
+[[menus]]
+name = "Scheduler"
+key = "SCHED"
+parent = "KERNEL"
+
+[[menus]]
+name = "Async Runtime"
+key = "ASYNC"
+parent = "SCHED"
+
+[[menus.items]]
+name = "Async Runtime"
+key = "ASYNC_RT"
+type = "bool"
+default = true
+"#;
+        AppState::new(ConfigSchema::from_str(toml).unwrap())
+    }
+
+    #[test]
+    fn nested_menu_navigation_uses_stack() {
+        let mut app = nested_menu_app();
+
+        app.enter_menu("KERNEL");
+        assert_eq!(app.current_menu_key(), Some("KERNEL"));
+        app.enter_menu("SCHED");
+        assert_eq!(app.current_menu_key(), Some("SCHED"));
+        app.enter_menu("ASYNC");
+        assert_eq!(app.current_menu_key(), Some("ASYNC"));
+
+        app.exit_menu();
+        assert_eq!(app.current_menu_key(), Some("SCHED"));
+        app.exit_menu();
+        assert_eq!(app.current_menu_key(), Some("KERNEL"));
+        app.exit_menu();
+        assert_eq!(app.current_menu_key(), None);
+    }
 }

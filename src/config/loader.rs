@@ -366,21 +366,6 @@ fn render_config(values: &ConfigValues, schema: Option<&ConfigSchema>) -> Result
                 out.push('\n');
             }
         }
-
-        let mut extras: Vec<_> = values
-            .keys()
-            .filter(|key| schema.get(key).is_none())
-            .cloned()
-            .collect();
-        extras.sort();
-        for key in extras {
-            if let Some(value) = values.get(&key) {
-                out.push_str(&key);
-                out.push_str(" = ");
-                out.push_str(&format_value(value)?);
-                out.push('\n');
-            }
-        }
     } else {
         let mut keys: Vec<_> = values.keys().cloned().collect();
         keys.sort();

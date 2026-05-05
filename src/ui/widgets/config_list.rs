@@ -85,7 +85,16 @@ impl StatefulWidget for ConfigList {
                 ListEntry::Menu { name, expanded, .. } => {
                     let cursor = if is_selected { ">" } else { " " };
                     let glyph = if *expanded { ">" } else { "+" };
-                    let line = format!("{} {} {}", cursor, glyph, name);
+                    let width = inner.width.saturating_sub(4) as usize;
+                    let text_width = width.saturating_sub(4);
+                    let name = truncate(name, text_width);
+                    let line = format!(
+                        "{} {:<text_width$} {} ",
+                        cursor,
+                        name,
+                        glyph,
+                        text_width = text_width
+                    );
                     let style = entry_style(is_selected, Color::Cyan);
                     buf.set_line(inner.x + 1, y, &Line::styled(line, style), inner.width - 2);
                 }
@@ -102,18 +111,23 @@ impl StatefulWidget for ConfigList {
                     let value = item_value(state, item);
 
                     let width = inner.width.saturating_sub(2) as usize;
-                    let key_width = width.saturating_sub(38).clamp(22, 44);
-                    let value_width = width.saturating_sub(key_width + 20).max(8);
+                    let value_width = if width >= 72 { 18 } else { 12 };
+                    let type_width = 6;
+                    let tag_width = 2;
+                    let fixed_width = 2 + 1 + 3 + value_width + 1 + type_width + 1 + tag_width;
+                    let name_width = width.saturating_sub(fixed_width).max(12);
                     let line = format!(
-                        "{}{} {:<key_width$} = {:<value_width$} {:>6} {:>2}",
+                        "{}{} {:<name_width$} {:>value_width$} {:>type_width$} {:>tag_width$}",
                         cursor,
                         modified,
-                        truncate(&item.key, key_width),
+                        truncate(&item.name, name_width),
                         truncate(&value, value_width),
                         item.config_type,
                         tag,
-                        key_width = key_width,
+                        name_width = name_width,
                         value_width = value_width,
+                        type_width = type_width,
+                        tag_width = tag_width,
                     );
 
                     buf.set_line(inner.x + 1, y, &Line::styled(line, style), inner.width - 2);
